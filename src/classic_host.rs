@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 use crate::hci::{AclAssembler, AclPacket, CodecError, CommandPacket, fragment_l2cap_pdu};
-use crate::l2cap::classic::{ChannelManager, ClassicChannelSpec};
+use crate::l2cap::classic::{ChannelManager, ClassicChannelSpec, ClassicChannelState};
 use crate::l2cap::{self, L2capPdu};
 use crate::{BluetoothAddress, BondStore, BondStoreError, ClassicBond};
 
@@ -415,6 +415,39 @@ impl<S: BondStore> ClassicHost<S> {
             .channels
             .send(source_cid, sdu)?;
         self.flush_channels()
+    }
+
+    pub(crate) fn connect_channel(
+        &mut self,
+        psm: u32,
+        spec: ClassicChannelSpec,
+    ) -> Result<u16, HostError> {
+        let source_cid = self
+            .connection
+            .as_mut()
+            .ok_or(HostError::NoConnection)?
+            .channels
+            .connect(psm, spec)?;
+        self.flush_channels()?;
+        Ok(source_cid)
+    }
+
+    pub(crate) fn channel_info(&self, source_cid: u16) -> Option<(u32, u16, bool)> {
+        let channel = self.connection.as_ref()?.channels.channel(source_cid)?;
+        Some((
+            channel.psm,
+            channel.peer_mtu,
+            channel.state == ClassicChannelState::Open,
+        ))
+    }
+
+    pub(crate) fn interrupt_send_capacity_available(&self) -> bool {
+        self.acl_flow.queued.is_empty()
+            && self.acl_flow.in_flight_total() < self.acl_flow.total_packets
+    }
+
+    pub(crate) fn channel_output_is_flushed(&self) -> bool {
+        self.acl_flow.queued.is_empty()
     }
 
     pub(crate) fn take_channel_sdu(&mut self, source_cid: u16) -> Option<Vec<u8>> {

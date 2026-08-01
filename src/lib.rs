@@ -14,6 +14,7 @@ mod api;
 mod classic_host;
 mod csr;
 mod hci;
+mod hid_service;
 #[expect(
     dead_code,
     reason = "the internal Classic protocol is consumed by the T06d host slice"

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
@@ -7,15 +7,20 @@ use crate::api::{SessionDriver, UsbAdapterMetadata};
 use crate::classic_host::{ClassicEvent, ClassicHost, HostOutput, SessionEvent};
 use crate::csr::{CsrVendorCommand, matches_csr_vendor_response};
 use crate::hci::{CommandPacket, EventPacket, Packet};
+use crate::hid_service::{
+    HID_CONTROL_PSM, HID_INTERRUPT_PSM, HidSdpChannel, HidpBridge, HidpBridgeError,
+    HidpBridgeEvent, SDP_PSM,
+};
 use crate::identity::{
     AdapterIdentityBackend, AdapterIdentityPreparation, AdapterIdentitySession,
     IdentityPreparationError, IdentityPreparationErrorKind, IdentityPreparationOptions,
     prepare_adapter_identity,
 };
+use crate::l2cap::classic::ClassicChannelSpec;
 use crate::usb::{OpenedUsb, ReaderEvent, UsbSelector};
 use crate::{
-    ActivityNotifier, AddressKind, BluetoothAddress, BondStore, Capabilities, ControllerVersion,
-    Error, ErrorKind, Event, LocalIdentity, OpenOptions, Session, SessionConfig,
+    ActivityNotifier, AddressKind, BluetoothAddress, BondStore, Capabilities, Channel,
+    ControllerVersion, Error, ErrorKind, Event, LocalIdentity, OpenOptions, Session, SessionConfig,
 };
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -56,6 +61,8 @@ const CONNECTION_REJECTED_UNACCEPTABLE_ADDRESS: u8 = 0x0F;
 const REMOTE_USER_TERMINATED_CONNECTION: u8 = 0x13;
 const AUTHENTICATION_FAILURE: u8 = 0x05;
 const BR_EDR_NOT_SUPPORTED_MASK: u8 = 0x20;
+const CLASSIC_SERVER_MTU: u16 = 672;
+const EVENT_QUEUE_CAPACITY: usize = 64;
 
 trait HciIo: Send {
     fn send(&mut self, packet: &Packet) -> Result<(), Error>;
@@ -245,9 +252,35 @@ struct BackendSession<T: HciIo, B: BondStore> {
     host: ClassicHost<B>,
     window: ConnectionWindow,
     connection: Option<(BluetoothAddress, u16)>,
+    protocols: ProtocolState,
+    active_reconnect: bool,
     terminal: Option<Error>,
     closed: bool,
     pending_events: VecDeque<Event>,
+}
+
+struct ProtocolState {
+    sdp: BTreeMap<u16, HidSdpChannel>,
+    control: Option<ProtocolChannel>,
+    interrupt: Option<ProtocolChannel>,
+    hidp: HidpBridge,
+}
+
+impl Default for ProtocolState {
+    fn default() -> Self {
+        Self {
+            sdp: BTreeMap::new(),
+            control: None,
+            interrupt: None,
+            hidp: HidpBridge::new(0, 0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ProtocolChannel {
+    cid: u16,
+    open: bool,
 }
 
 impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
@@ -258,17 +291,29 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
             initialized.version,
             io.metadata(),
         );
+        let mut host = ClassicHost::new(
+            bonds,
+            usize::from(initialized.acl_packet_length),
+            initialized.acl_packet_count,
+        );
+        for psm in [SDP_PSM, HID_CONTROL_PSM, HID_INTERRUPT_PSM] {
+            host.register_server(
+                psm,
+                ClassicChannelSpec {
+                    mtu: CLASSIC_SERVER_MTU,
+                },
+            )
+            .map_err(|source| Error::with_source(ErrorKind::OpenFailed, source))?;
+        }
         Ok(Self {
             io,
             capabilities,
             config,
-            host: ClassicHost::new(
-                bonds,
-                usize::from(initialized.acl_packet_length),
-                initialized.acl_packet_count,
-            ),
+            host,
             window: ConnectionWindow::Idle,
             connection: None,
+            protocols: ProtocolState::default(),
+            active_reconnect: false,
             terminal: None,
             closed: false,
             pending_events: VecDeque::new(),
@@ -324,10 +369,23 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
             Packet::Event(event) => self.handle_event(event),
             Packet::Acl(packet) => {
                 self.host.process_acl(packet).map_err(map_host_error)?;
+                self.drain_host_output()?;
+                self.refresh_outgoing_channels()?;
+                self.process_protocol_input()?;
                 self.drain_host_output()
             }
             Packet::Command(_) => Err(Error::new(ErrorKind::ProtocolViolation)),
         }
+    }
+
+    fn handle_polled_packet(&mut self, packet: Packet) -> Result<(), Error> {
+        if let Err(error) = self.handle_packet(packet) {
+            return Err(self.record_terminal(error));
+        }
+        if let Some(error) = &self.terminal {
+            return Err(error.clone());
+        }
+        Ok(())
     }
 
     fn handle_event(&mut self, event: EventPacket) -> Result<(), Error> {
@@ -371,7 +429,8 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
             }
             if status != 0 {
                 self.end_connection_window()?;
-                self.pending_events.push_back(Event::Disconnected {
+                self.active_reconnect = false;
+                self.enqueue_event(Event::Disconnected {
                     reason: Some(status),
                 });
             }
@@ -396,23 +455,206 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
                 }) => {
                     self.connection = Some((peer, connection_handle));
                     self.window = ConnectionWindow::Connected;
+                    self.protocols = ProtocolState::default();
                     self.write_inquiry_response()?;
                     self.set_scan(false, true)?;
                     self.set_scan(false, false)?;
-                    self.pending_events.push_back(Event::Connected { peer });
+                    self.enqueue_event(Event::Connected { peer });
                 }
                 HostOutput::Event(SessionEvent::Disconnected { reason, .. }) => {
                     self.connection = None;
                     self.window = ConnectionWindow::Idle;
-                    self.pending_events.push_back(Event::Disconnected {
+                    self.protocols = ProtocolState::default();
+                    self.active_reconnect = false;
+                    self.enqueue_event(Event::Disconnected {
                         reason: Some(reason),
                     });
                 }
-                HostOutput::Event(
-                    SessionEvent::BondStored { .. }
-                    | SessionEvent::Encrypted { .. }
-                    | SessionEvent::ChannelOpened { .. },
-                ) => {}
+                HostOutput::Event(SessionEvent::Encrypted { .. }) => {
+                    self.start_active_reconnect_control()?;
+                }
+                HostOutput::Event(SessionEvent::ChannelOpened { psm, source_cid }) => {
+                    self.on_channel_opened(psm, source_cid)?;
+                }
+                HostOutput::Event(SessionEvent::BondStored { .. }) => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn enqueue_event(&mut self, event: Event) {
+        if self.terminal.is_some() {
+            return;
+        }
+        if self.pending_events.len() == EVENT_QUEUE_CAPACITY {
+            self.terminal = Some(Error::new(ErrorKind::EventQueueOverflow));
+            return;
+        }
+        self.pending_events.push_back(event);
+    }
+
+    fn start_active_reconnect_control(&mut self) -> Result<(), Error> {
+        if !self.active_reconnect || self.protocols.control.is_some() {
+            return Ok(());
+        }
+        let cid = self
+            .host
+            .connect_channel(
+                HID_CONTROL_PSM,
+                ClassicChannelSpec {
+                    mtu: CLASSIC_SERVER_MTU,
+                },
+            )
+            .map_err(map_host_error)?;
+        self.protocols.control = Some(ProtocolChannel { cid, open: false });
+        Ok(())
+    }
+
+    fn refresh_outgoing_channels(&mut self) -> Result<(), Error> {
+        let control = self.protocols.control.filter(|channel| !channel.open);
+        if let Some(channel) = control
+            && self
+                .host
+                .channel_info(channel.cid)
+                .is_some_and(|(_, _, open)| open)
+        {
+            self.on_channel_opened(HID_CONTROL_PSM, channel.cid)?;
+        }
+
+        let interrupt = self.protocols.interrupt.filter(|channel| !channel.open);
+        if let Some(channel) = interrupt
+            && self
+                .host
+                .channel_info(channel.cid)
+                .is_some_and(|(_, _, open)| open)
+        {
+            self.on_channel_opened(HID_INTERRUPT_PSM, channel.cid)?;
+        }
+        Ok(())
+    }
+
+    fn on_channel_opened(&mut self, psm: u32, cid: u16) -> Result<(), Error> {
+        let (actual_psm, peer_mtu, open) = self
+            .host
+            .channel_info(cid)
+            .ok_or_else(|| Error::new(ErrorKind::ProtocolViolation))?;
+        if !open || actual_psm != psm {
+            return Err(Error::new(ErrorKind::ProtocolViolation));
+        }
+        match psm {
+            SDP_PSM => {
+                self.protocols
+                    .sdp
+                    .entry(cid)
+                    .or_insert_with(|| HidSdpChannel::new(self.config.hid_service(), peer_mtu));
+            }
+            HID_CONTROL_PSM => {
+                let first_open = self
+                    .protocols
+                    .control
+                    .is_none_or(|channel| channel.cid == cid && !channel.open);
+                if first_open {
+                    self.protocols.control = Some(ProtocolChannel { cid, open: true });
+                    self.protocols
+                        .hidp
+                        .set_peer_mtu(Channel::Control, usize::from(peer_mtu));
+                    self.enqueue_event(Event::ChannelOpened {
+                        channel: Channel::Control,
+                    });
+                }
+                if self.active_reconnect && self.protocols.interrupt.is_none() {
+                    let cid = self
+                        .host
+                        .connect_channel(
+                            HID_INTERRUPT_PSM,
+                            ClassicChannelSpec {
+                                mtu: CLASSIC_SERVER_MTU,
+                            },
+                        )
+                        .map_err(map_host_error)?;
+                    self.protocols.interrupt = Some(ProtocolChannel { cid, open: false });
+                }
+            }
+            HID_INTERRUPT_PSM => {
+                let first_open = self
+                    .protocols
+                    .interrupt
+                    .is_none_or(|channel| channel.cid == cid && !channel.open);
+                if first_open {
+                    self.protocols.interrupt = Some(ProtocolChannel { cid, open: true });
+                    self.protocols
+                        .hidp
+                        .set_peer_mtu(Channel::Interrupt, usize::from(peer_mtu));
+                    self.enqueue_event(Event::ChannelOpened {
+                        channel: Channel::Interrupt,
+                    });
+                }
+            }
+            _ => return Err(Error::new(ErrorKind::ProtocolViolation)),
+        }
+        Ok(())
+    }
+
+    fn process_protocol_input(&mut self) -> Result<(), Error> {
+        let sdp_cids = self.protocols.sdp.keys().copied().collect::<Vec<_>>();
+        for cid in sdp_cids {
+            while let Some(request) = self.host.take_channel_sdu(cid) {
+                let response = self
+                    .protocols
+                    .sdp
+                    .get_mut(&cid)
+                    .and_then(|channel| channel.handle_sdu(&request));
+                if let Some(response) = response {
+                    self.host
+                        .send_channel_sdu(cid, &response)
+                        .map_err(map_host_error)?;
+                }
+            }
+        }
+
+        for (channel, protocol_channel) in [
+            (Channel::Control, self.protocols.control),
+            (Channel::Interrupt, self.protocols.interrupt),
+        ] {
+            let Some(protocol_channel) = protocol_channel.filter(|channel| channel.open) else {
+                continue;
+            };
+            while let Some(sdu) = self.host.take_channel_sdu(protocol_channel.cid) {
+                match self.protocols.hidp.handle(channel, &sdu) {
+                    Ok(events) => self.apply_hidp_events(events)?,
+                    Err(HidpBridgeError::Malformed {
+                        channel: Channel::Control,
+                    }) => {
+                        if let Ok(response) = self.protocols.hidp.invalid_parameter_response() {
+                            self.host
+                                .send_channel_sdu(protocol_channel.cid, &response)
+                                .map_err(map_host_error)?;
+                        }
+                    }
+                    Err(_) => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_hidp_events(&mut self, events: Vec<HidpBridgeEvent>) -> Result<(), Error> {
+        for event in events {
+            match event {
+                HidpBridgeEvent::Output { channel, payload } => {
+                    self.enqueue_event(Event::HidOutput { channel, payload });
+                }
+                HidpBridgeEvent::ControlResponse(response) => {
+                    if let Some(control) = self.protocols.control.filter(|channel| channel.open) {
+                        self.host
+                            .send_channel_sdu(control.cid, &response)
+                            .map_err(map_host_error)?;
+                    }
+                }
+                HidpBridgeEvent::Suspend
+                | HidpBridgeEvent::Resume
+                | HidpBridgeEvent::VirtualCableUnplug
+                | HidpBridgeEvent::Unsupported { .. } => {}
             }
         }
         Ok(())
@@ -436,6 +678,7 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
         self.set_scan(false, true)?;
         self.write_inquiry_response()?;
         self.set_scan(true, true)?;
+        self.active_reconnect = false;
         self.window = ConnectionWindow::Pairing { peer: None };
         Ok(())
     }
@@ -471,6 +714,7 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
         parameters.extend_from_slice(&0_u16.to_le_bytes());
         parameters.push(1);
         self.send_command(HCI_CREATE_CONNECTION, parameters)?;
+        self.active_reconnect = true;
         self.window = ConnectionWindow::Reconnecting { peer };
         Ok(())
     }
@@ -479,14 +723,14 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
         self.ensure_active()?;
         if self.pending_events.is_empty() {
             match self.io.recv_timeout(timeout) {
-                Ok(Some(packet)) => self.handle_packet(packet)?,
+                Ok(Some(packet)) => self.handle_polled_packet(packet)?,
                 Ok(None) => {}
                 Err(error) => return Err(self.record_terminal(error)),
             }
         }
         loop {
             match self.io.recv_timeout(Duration::ZERO) {
-                Ok(Some(packet)) => self.handle_packet(packet)?,
+                Ok(Some(packet)) => self.handle_polled_packet(packet)?,
                 Ok(None) => break,
                 Err(error) => return Err(self.record_terminal(error)),
             }
@@ -495,16 +739,38 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
     }
 
     fn interrupt_send_capacity_available(&self) -> bool {
-        false
+        self.terminal.is_none()
+            && !self.closed
+            && self.protocols.interrupt.is_some_and(|channel| channel.open)
+            && self.host.interrupt_send_capacity_available()
     }
 
-    fn send_interrupt(&mut self, _payload: &[u8]) -> Result<(), Error> {
+    fn send_interrupt(&mut self, payload: &[u8]) -> Result<(), Error> {
         self.ensure_active()?;
-        Err(Error::new(ErrorKind::SendRejected))
+        let Some(channel) = self.protocols.interrupt.filter(|channel| channel.open) else {
+            return Err(Error::new(ErrorKind::SendRejected));
+        };
+        if !self.host.interrupt_send_capacity_available() {
+            return Err(Error::new(ErrorKind::SendRejected));
+        }
+        let encoded = self
+            .protocols
+            .hidp
+            .encode_input(payload)
+            .map_err(|source| Error::with_source(ErrorKind::SendRejected, source))?;
+        self.host
+            .send_channel_sdu(channel.cid, &encoded)
+            .map_err(|source| Error::with_source(ErrorKind::SendRejected, source))?;
+        self.drain_host_output()
     }
 
     fn drain_interrupt(&mut self, _timeout: Duration) -> Result<(), Error> {
-        self.ensure_active()
+        self.ensure_active()?;
+        if self.host.channel_output_is_flushed() {
+            Ok(())
+        } else {
+            Err(Error::new(ErrorKind::DrainTimedOut))
+        }
     }
 
     fn disconnect(&mut self) -> Result<(), Error> {
@@ -943,7 +1209,10 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::{BondStoreError, ClassicBond, HidSdpPolicy, HidServiceConfig};
+    use crate::hci::{AclAssembler, AclPacket};
+    use crate::l2cap::classic::{ChannelManager, ClassicChannelState};
+    use crate::sdp::{DataElement, SdpPdu};
+    use crate::{BluetoothUuid, BondStoreError, ClassicBond, HidSdpPolicy, HidServiceConfig};
 
     const PEER: BluetoothAddress =
         BluetoothAddress::from_le_bytes([6, 5, 4, 3, 2, 1], AddressKind::Public);
@@ -1070,6 +1339,190 @@ mod tests {
     }
 
     #[test]
+    fn pair_sdp_continuation_hid_output_and_interrupt_input_share_one_session() {
+        let (io, _commands) = ScriptedIo::initialization();
+        let responses = io.live_responses.clone();
+        let host_acl = io.acl_packets.clone();
+        let mut session =
+            BackendSession::initialize(io, config(), MemoryBondStore::default()).unwrap();
+        session.start_pairing().unwrap();
+        responses.lock().unwrap().extend([
+            Packet::Event(event(
+                EVENT_CONNECTION_REQUEST,
+                [PEER.as_le_bytes().as_slice(), &[0, 0, 0, 1]].concat(),
+            )),
+            Packet::Event(event(
+                EVENT_CONNECTION_COMPLETE,
+                [&[0, 0x40, 0], PEER.as_le_bytes().as_slice(), &[1, 0]].concat(),
+            )),
+            Packet::Event(event(EVENT_AUTHENTICATION_COMPLETE, vec![0, 0x40, 0])),
+            Packet::Event(event(EVENT_ENCRYPTION_CHANGE, vec![0, 0x40, 0, 1])),
+        ]);
+        assert_eq!(
+            session.poll(Duration::ZERO).unwrap(),
+            [Event::Connected { peer: PEER }]
+        );
+
+        let mut peer = TestPeer::new(0x0040, responses, host_acl);
+        let (sdp_cid, events) = peer.open_channel(&mut session, SDP_PSM, 48);
+        assert!(events.is_empty(), "SDP channels stay private");
+
+        let mut continuation_state = vec![0];
+        let mut attribute_lists = Vec::new();
+        let mut rounds = 0;
+        loop {
+            rounds += 1;
+            let request = SdpPdu::ServiceSearchAttributeRequest {
+                transaction_id: rounds,
+                service_search_pattern: DataElement::sequence([DataElement::uuid(
+                    BluetoothUuid::from_u16(0x1124),
+                )]),
+                maximum_attribute_byte_count: 19,
+                attribute_id_list: DataElement::sequence([DataElement::unsigned_integer_32(
+                    0x0000_FFFF,
+                )]),
+                continuation_state,
+            }
+            .to_bytes()
+            .unwrap();
+            peer.send(&mut session, sdp_cid, &request);
+            let response = SdpPdu::from_bytes(&peer.take_sdu(sdp_cid)).unwrap();
+            let SdpPdu::ServiceSearchAttributeResponse {
+                attribute_lists: chunk,
+                continuation_state: next,
+                ..
+            } = response
+            else {
+                panic!("expected HID service search attribute response")
+            };
+            attribute_lists.extend(chunk);
+            continuation_state = next;
+            if continuation_state == [0] {
+                break;
+            }
+        }
+        assert!(rounds > 1, "48-byte peer MTU must exercise continuation");
+        assert!(contains_bytes(&attribute_lists, b"Wireless Gamepad"));
+        assert!(contains_bytes(&attribute_lists, &[0x05, 0x01]));
+
+        let (control_cid, control_events) = peer.open_channel(&mut session, HID_CONTROL_PSM, 64);
+        assert_eq!(
+            control_events,
+            [Event::ChannelOpened {
+                channel: Channel::Control,
+            }]
+        );
+        let (interrupt_cid, interrupt_events) =
+            peer.open_channel(&mut session, HID_INTERRUPT_PSM, 64);
+        assert_eq!(
+            interrupt_events,
+            [Event::ChannelOpened {
+                channel: Channel::Interrupt,
+            }]
+        );
+
+        let output_events = peer.send(&mut session, interrupt_cid, &[0xA2, 0x01, 0x00, 0x03]);
+        assert_eq!(
+            output_events,
+            [Event::HidOutput {
+                channel: Channel::Interrupt,
+                payload: Box::from([0x01, 0x00, 0x03]),
+            }]
+        );
+
+        assert!(session.interrupt_send_capacity_available());
+        session.send_interrupt(&[0x30, 0x01]).unwrap();
+        peer.pump(&mut session);
+        assert_eq!(peer.take_sdu(interrupt_cid), [0xA1, 0x30, 0x01]);
+        assert!(session.drain_interrupt(Duration::ZERO).is_ok());
+
+        // The control channel remains independently usable after interrupt I/O.
+        let control_events = peer.send(&mut session, control_cid, &[0xA2, 0x02]);
+        assert_eq!(
+            control_events,
+            [Event::HidOutput {
+                channel: Channel::Control,
+                payload: Box::from([0x02]),
+            }]
+        );
+    }
+
+    #[test]
+    fn active_reconnect_opens_control_then_interrupt_channels() {
+        let (io, _commands) = ScriptedIo::initialization();
+        let responses = io.live_responses.clone();
+        let host_acl = io.acl_packets.clone();
+        let mut bonds = MemoryBondStore::default();
+        bonds
+            .bonds
+            .insert(PEER, ClassicBond::new([0xB6; 16], 4, true));
+        let mut session = BackendSession::initialize(io, config(), bonds).unwrap();
+        session.start_reconnect().unwrap();
+        responses.lock().unwrap().extend([
+            Packet::Event(event(
+                EVENT_CONNECTION_COMPLETE,
+                [&[0, 0x40, 0], PEER.as_le_bytes().as_slice(), &[1, 0]].concat(),
+            )),
+            Packet::Event(event(EVENT_ENCRYPTION_CHANGE, vec![0, 0x40, 0, 1])),
+        ]);
+        assert_eq!(
+            session.poll(Duration::ZERO).unwrap(),
+            [Event::Connected { peer: PEER }]
+        );
+
+        let mut peer = TestPeer::new(0x0040, responses, host_acl);
+        peer.channels
+            .register_server(
+                Some(HID_CONTROL_PSM),
+                ClassicChannelSpec {
+                    mtu: CLASSIC_SERVER_MTU,
+                },
+            )
+            .unwrap();
+        peer.channels
+            .register_server(
+                Some(HID_INTERRUPT_PSM),
+                ClassicChannelSpec {
+                    mtu: CLASSIC_SERVER_MTU,
+                },
+            )
+            .unwrap();
+        let events = peer.pump(&mut session);
+
+        assert_eq!(
+            events,
+            [
+                Event::ChannelOpened {
+                    channel: Channel::Control,
+                },
+                Event::ChannelOpened {
+                    channel: Channel::Interrupt,
+                },
+            ],
+            "control={:?} interrupt={:?}",
+            session.protocols.control,
+            session.protocols.interrupt,
+        );
+        assert!(session.interrupt_send_capacity_available());
+    }
+
+    #[test]
+    fn event_queue_overflow_is_immediately_terminal() {
+        let (io, _) = ScriptedIo::initialization();
+        let mut session =
+            BackendSession::initialize(io, config(), MemoryBondStore::default()).unwrap();
+
+        for _ in 0..=EVENT_QUEUE_CAPACITY {
+            session.enqueue_event(Event::Disconnected { reason: None });
+        }
+
+        let first = session.poll(Duration::ZERO).unwrap_err();
+        assert_eq!(first.kind(), ErrorKind::EventQueueOverflow);
+        let second = session.poll(Duration::ZERO).unwrap_err();
+        assert_eq!(second.kind(), ErrorKind::EventQueueOverflow);
+    }
+
+    #[test]
     fn rewritten_identity_mismatch_requires_recovery() {
         assert_eq!(
             identity_mismatch_kind(Some(AdapterIdentityPreparation::Rewritten)),
@@ -1079,6 +1532,118 @@ mod tests {
             identity_mismatch_kind(Some(AdapterIdentityPreparation::AlreadyActive)),
             ErrorKind::IdentityMismatch
         );
+    }
+
+    struct TestPeer {
+        connection_handle: u16,
+        channels: ChannelManager,
+        assembler: AclAssembler,
+        responses: Arc<Mutex<VecDeque<Packet>>>,
+        host_acl: Arc<Mutex<VecDeque<AclPacket>>>,
+    }
+
+    impl TestPeer {
+        fn new(
+            connection_handle: u16,
+            responses: Arc<Mutex<VecDeque<Packet>>>,
+            host_acl: Arc<Mutex<VecDeque<AclPacket>>>,
+        ) -> Self {
+            Self {
+                connection_handle,
+                channels: ChannelManager::new(),
+                assembler: AclAssembler::default(),
+                responses,
+                host_acl,
+            }
+        }
+
+        fn open_channel(
+            &mut self,
+            session: &mut BackendSession<ScriptedIo, MemoryBondStore>,
+            psm: u32,
+            mtu: u16,
+        ) -> (u16, Vec<Event>) {
+            let cid = self
+                .channels
+                .connect(psm, ClassicChannelSpec { mtu })
+                .unwrap();
+            let mut events = Vec::new();
+            for _ in 0..32 {
+                events.extend(self.pump(session));
+                if self
+                    .channels
+                    .channel(cid)
+                    .is_some_and(|channel| channel.state == ClassicChannelState::Open)
+                {
+                    return (cid, events);
+                }
+            }
+            panic!("peer channel did not open for PSM {psm:#06x}");
+        }
+
+        fn send(
+            &mut self,
+            session: &mut BackendSession<ScriptedIo, MemoryBondStore>,
+            cid: u16,
+            sdu: &[u8],
+        ) -> Vec<Event> {
+            self.channels.send(cid, sdu).unwrap();
+            self.pump(session)
+        }
+
+        fn take_sdu(&mut self, cid: u16) -> Vec<u8> {
+            self.channels
+                .channel_mut(cid)
+                .and_then(|channel| channel.pop_received())
+                .expect("peer channel received one SDU")
+        }
+
+        fn pump(
+            &mut self,
+            session: &mut BackendSession<ScriptedIo, MemoryBondStore>,
+        ) -> Vec<Event> {
+            let mut events = Vec::new();
+            for _ in 0..64 {
+                let outbound = self.channels.drain_outbound();
+                let mut progress = !outbound.is_empty();
+                if progress {
+                    self.responses
+                        .lock()
+                        .unwrap()
+                        .extend(outbound.into_iter().map(|pdu| {
+                            Packet::Acl(
+                                AclPacket::new(self.connection_handle, 0, 0, pdu.to_bytes(false))
+                                    .unwrap(),
+                            )
+                        }));
+                }
+
+                let polled = session.poll(Duration::ZERO).unwrap();
+                progress |= !polled.is_empty();
+                events.extend(polled);
+
+                let host_packets = {
+                    let mut packets = self.host_acl.lock().unwrap();
+                    std::mem::take(&mut *packets)
+                };
+                progress |= !host_packets.is_empty();
+                for packet in host_packets {
+                    if let Some(bytes) = self.assembler.feed(&packet).unwrap() {
+                        self.channels.process_bytes(&bytes).unwrap();
+                    }
+                }
+                if !progress {
+                    return events;
+                }
+            }
+            panic!("peer/session pump did not quiesce");
+        }
+    }
+
+    fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 
     #[derive(Default)]
@@ -1114,6 +1679,7 @@ mod tests {
         next_response: usize,
         live_responses: Arc<Mutex<VecDeque<Packet>>>,
         commands: Arc<Mutex<Vec<CommandPacket>>>,
+        acl_packets: Arc<Mutex<VecDeque<AclPacket>>>,
     }
 
     impl ScriptedIo {
@@ -1129,6 +1695,7 @@ mod tests {
                     next_response: 0,
                     live_responses: Arc::new(Mutex::new(VecDeque::new())),
                     commands: commands.clone(),
+                    acl_packets: Arc::new(Mutex::new(VecDeque::new())),
                 },
                 commands,
             )
@@ -1137,10 +1704,11 @@ mod tests {
 
     impl HciIo for ScriptedIo {
         fn send(&mut self, packet: &Packet) -> Result<(), Error> {
-            let Packet::Command(command) = packet else {
-                return Ok(());
-            };
-            self.commands.lock().unwrap().push(command.clone());
+            match packet {
+                Packet::Command(command) => self.commands.lock().unwrap().push(command.clone()),
+                Packet::Acl(packet) => self.acl_packets.lock().unwrap().push_back(packet.clone()),
+                Packet::Event(_) => return Err(Error::new(ErrorKind::ProtocolViolation)),
+            }
             Ok(())
         }
 
@@ -1181,7 +1749,7 @@ mod tests {
             ),
             command_complete(HCI_SET_EVENT_MASK, Vec::new()),
             command_complete(HCI_LE_SET_EVENT_MASK, Vec::new()),
-            command_complete(HCI_READ_BUFFER_SIZE, vec![0xFD, 0x03, 0, 8, 0, 0, 0]),
+            command_complete(HCI_READ_BUFFER_SIZE, vec![0xFD, 0x03, 0, 64, 0, 0, 0]),
             command_complete(HCI_READ_BD_ADDR, local_address().as_le_bytes().to_vec()),
         ];
         responses.extend(
