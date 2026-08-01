@@ -2,7 +2,7 @@
 
 This file records user-visible changes to `swbt-bumble-backend`.
 
-## 0.1.0 (unreleased)
+## 0.1.0 - 2026-08-01
 
 - Extract the Bluetooth Classic HID subset required by `swbt-rs` behind an
   owned `Session` API.
