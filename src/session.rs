@@ -779,9 +779,6 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
         let Some(channel) = self.protocols.interrupt.filter(|channel| channel.open) else {
             return Err(Error::new(ErrorKind::SendRejected));
         };
-        if !self.host.interrupt_send_capacity_available() {
-            return Err(Error::new(ErrorKind::SendRejected));
-        }
         let encoded = self
             .protocols
             .hidp
@@ -1659,6 +1656,61 @@ mod tests {
             vec![1, 0x40, 0, 64, 0],
         )));
 
+        session.drain_interrupt(Duration::from_secs(1)).unwrap();
+        assert!(session.host.channel_output_is_flushed());
+    }
+
+    #[test]
+    fn explicit_interrupt_send_queues_behind_in_flight_acl_credit() {
+        let (io, _) = ScriptedIo::initialization();
+        let responses = io.live_responses.clone();
+        let host_acl = io.acl_packets.clone();
+        let mut bonds = MemoryBondStore::default();
+        bonds
+            .bonds
+            .insert(PEER, ClassicBond::new([0xB6; 16], 4, true));
+        let mut session = BackendSession::initialize(io, config(), bonds).unwrap();
+        session.start_reconnect().unwrap();
+        responses.lock().unwrap().extend([
+            Packet::Event(event(
+                EVENT_CONNECTION_COMPLETE,
+                [&[0, 0x40, 0], PEER.as_le_bytes().as_slice(), &[1, 0]].concat(),
+            )),
+            Packet::Event(event(EVENT_ENCRYPTION_CHANGE, vec![0, 0x40, 0, 1])),
+        ]);
+        assert_eq!(
+            session.poll(Duration::ZERO).unwrap(),
+            [Event::Connected { peer: PEER }]
+        );
+
+        let mut peer = TestPeer::new(0x0040, responses.clone(), host_acl);
+        for psm in [HID_CONTROL_PSM, HID_INTERRUPT_PSM] {
+            peer.channels
+                .register_server(
+                    Some(psm),
+                    ClassicChannelSpec {
+                        mtu: CLASSIC_SERVER_MTU,
+                    },
+                )
+                .unwrap();
+        }
+        peer.pump(&mut session);
+
+        let mut reports_sent = 0;
+        while session.interrupt_send_capacity_available() {
+            session.send_interrupt(&[0x30, 0x01]).unwrap();
+            reports_sent += 1;
+            assert!(reports_sent <= 64);
+        }
+        assert!(reports_sent > 0);
+        assert!(!session.interrupt_send_capacity_available());
+        session.send_interrupt(&[0x30, 0x00]).unwrap();
+        assert!(!session.host.channel_output_is_flushed());
+
+        responses.lock().unwrap().push_back(Packet::Event(event(
+            EVENT_NUMBER_OF_COMPLETED_PACKETS,
+            vec![1, 0x40, 0, 64, 0],
+        )));
         session.drain_interrupt(Duration::from_secs(1)).unwrap();
         assert!(session.host.channel_output_is_flushed());
     }

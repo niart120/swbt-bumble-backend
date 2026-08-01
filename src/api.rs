@@ -625,7 +625,8 @@ impl Session {
         self.driver.poll(timeout)
     }
 
-    /// Reports whether an interrupt input report can enter the host-side queue.
+    /// Reports whether an interrupt input report can be sent without waiting
+    /// in the host-side ACL queue.
     pub fn interrupt_send_capacity_available(&self) -> bool {
         self.driver.interrupt_send_capacity_available()
     }
@@ -634,8 +635,8 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::SendRejected`] when the channel or flow-control
-    /// window cannot accept the report.
+    /// Returns [`ErrorKind::SendRejected`] when the interrupt channel is not
+    /// open or the payload is invalid for the negotiated channel.
     pub fn send_interrupt(&mut self, payload: &[u8]) -> Result<(), Error> {
         self.driver.send_interrupt(payload)
     }
