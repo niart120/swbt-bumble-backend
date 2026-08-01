@@ -7,7 +7,7 @@ use std::fmt;
 use crate::hci::{AclAssembler, AclPacket, CodecError, CommandPacket, fragment_l2cap_pdu};
 use crate::l2cap::classic::{ChannelManager, ClassicChannelSpec};
 use crate::l2cap::{self, L2capPdu};
-use crate::{BluetoothAddress, ClassicBond};
+use crate::{BluetoothAddress, BondStore, BondStoreError, ClassicBond};
 
 const HCI_ACCEPT_CONNECTION_REQUEST: u16 = 0x0409;
 const HCI_LINK_KEY_REQUEST_REPLY: u16 = 0x040B;
@@ -19,19 +19,6 @@ const HCI_USER_CONFIRMATION_REQUEST_REPLY: u16 = 0x042C;
 const HCI_ROLE_PERIPHERAL: u8 = 0x01;
 const HCI_IO_CAPABILITY_NO_INPUT_NO_OUTPUT: u8 = 0x03;
 const HCI_AUTHENTICATION_REQUIREMENTS_GENERAL_BONDING: u8 = 0x01;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BondStoreError {
-    Load,
-    Upsert,
-    Delete,
-}
-
-pub(crate) trait BondStore {
-    fn load(&self, peer: BluetoothAddress) -> Result<Option<ClassicBond>, BondStoreError>;
-    fn upsert(&mut self, peer: BluetoothAddress, bond: ClassicBond) -> Result<(), BondStoreError>;
-    fn delete(&mut self, peer: BluetoothAddress) -> Result<(), BondStoreError>;
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClassicEvent {
@@ -533,17 +520,20 @@ mod tests {
             Ok(self.bonds.get(&peer).cloned())
         }
 
+        fn load_all(&self) -> Result<Vec<(BluetoothAddress, ClassicBond)>, BondStoreError> {
+            Ok(self
+                .bonds
+                .iter()
+                .map(|(peer, bond)| (*peer, bond.clone()))
+                .collect())
+        }
+
         fn upsert(
             &mut self,
             peer: BluetoothAddress,
             bond: ClassicBond,
         ) -> Result<(), BondStoreError> {
             self.bonds.insert(peer, bond);
-            Ok(())
-        }
-
-        fn delete(&mut self, peer: BluetoothAddress) -> Result<(), BondStoreError> {
-            self.bonds.remove(&peer);
             Ok(())
         }
     }

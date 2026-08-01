@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod api;
 #[expect(
     dead_code,
     reason = "the internal Classic host is connected to the public session in T06f"
@@ -34,6 +35,11 @@ mod sdp;
 mod usb;
 mod values;
 
+pub use api::{
+    ActivityNotifier, AdapterSelector, BondStore, BondStoreError, Capabilities, Channel,
+    ControllerVersion, Error, ErrorKind, Event, HidSdpPolicy, HidServiceConfig, LocalIdentity,
+    OpenOptions, Session, SessionConfig, UsbAdapterMetadata,
+};
 pub use values::{AddressKind, BluetoothAddress, BluetoothUuid, ClassicBond, ValueError};
 
 /// Fixed Bumble fork revision used as the extraction baseline.

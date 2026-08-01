@@ -206,11 +206,22 @@ impl Hash for BluetoothUuid {
 }
 
 /// Classic pairing material retained for reconnect.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ClassicBond {
     link_key: [u8; 16],
     link_key_type: u8,
     authenticated: bool,
+}
+
+impl fmt::Debug for ClassicBond {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClassicBond")
+            .field("link_key", &"<redacted>")
+            .field("link_key_type", &self.link_key_type)
+            .field("authenticated", &self.authenticated)
+            .finish()
+    }
 }
 
 impl ClassicBond {
