@@ -60,6 +60,7 @@ const EVENT_USER_CONFIRMATION_REQUEST: u8 = 0x33;
 const EVENT_VENDOR: u8 = 0xFF;
 const EVENT_MASK: [u8; 8] = [0xFF, 0x9F, 0xFF, 0xBF, 0x07, 0xF8, 0xBF, 0x3D];
 const LE_EVENT_MASK: [u8; 8] = [0xFF, 0xFF, 0xF7, 0xFF, 0x0F, 0xED, 0x7B, 0x00];
+const LEGACY_LE_EVENT_MASK: [u8; 8] = [0x1F, 0, 0, 0, 0, 0, 0, 0];
 const DEFAULT_LINK_POLICY_SETTINGS: u16 = 0x0005;
 const CONNECTION_REJECTED_UNACCEPTABLE_ADDRESS: u8 = 0x0F;
 const REMOTE_USER_TERMINATED_CONNECTION: u8 = 0x13;
@@ -873,7 +874,12 @@ fn initialize_controller<T: HciIo>(
     }
 
     send_complete(io, command(HCI_SET_EVENT_MASK, EVENT_MASK.to_vec())?)?;
-    send_complete(io, command(HCI_LE_SET_EVENT_MASK, LE_EVENT_MASK.to_vec())?)?;
+    let le_event_mask = if version.hci_version <= 6 {
+        LEGACY_LE_EVENT_MASK
+    } else {
+        LE_EVENT_MASK
+    };
+    send_complete(io, command(HCI_LE_SET_EVENT_MASK, le_event_mask.to_vec())?)?;
     let buffer = send_complete(io, command(HCI_READ_BUFFER_SIZE, Vec::new())?)?;
     require_len(&buffer, 7, "buffer size")?;
     let acl_packet_length = u16::from_le_bytes([buffer[0], buffer[1]]);
@@ -1305,12 +1311,28 @@ mod tests {
             ]
         );
         let commands = commands.lock().unwrap();
+        assert_eq!(commands[5].parameters, LE_EVENT_MASK);
         assert_eq!(commands[8].parameters.len(), 248);
         assert_eq!(&commands[9].parameters, &[0x08, 0x25, 0x00]);
         assert_eq!(
             &commands[11].parameters[1..],
             config().extended_inquiry_response()
         );
+    }
+
+    #[test]
+    fn legacy_hci_version_uses_legacy_le_event_mask() {
+        let (mut io, commands) = ScriptedIo::initialization();
+        io.responses[2] = Ok(Some(command_complete(
+            HCI_READ_LOCAL_VERSION_INFORMATION,
+            vec![6, 0x34, 0x12, 6, 10, 0, 0x78, 0x56],
+        )));
+
+        BackendSession::initialize(io, config(), MemoryBondStore::default()).unwrap();
+
+        let commands = commands.lock().unwrap();
+        assert_eq!(commands[5].opcode, HCI_LE_SET_EVENT_MASK);
+        assert_eq!(commands[5].parameters, [0x1F, 0, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]
