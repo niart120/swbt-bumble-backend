@@ -296,6 +296,10 @@ impl AclAssembler {
         );
         Ok(None)
     }
+
+    pub(crate) fn clear_handle(&mut self, connection_handle: u16) {
+        self.pending.remove(&connection_handle);
+    }
 }
 
 fn require_packet_type(packet: &[u8], expected: u8) -> Result<(), CodecError> {

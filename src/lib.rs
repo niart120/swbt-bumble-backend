@@ -6,6 +6,11 @@
 
 #![forbid(unsafe_code)]
 
+#[expect(
+    dead_code,
+    reason = "the internal Classic host is connected to the public session in T06f"
+)]
+mod classic_host;
 #[cfg_attr(
     not(test),
     expect(
