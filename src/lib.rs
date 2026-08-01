@@ -11,13 +11,6 @@
     reason = "the internal Classic host is connected to the public session in T06f"
 )]
 mod classic_host;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the internal codec is consumed by the T06c-T06e extraction slices"
-    )
-)]
 mod hci;
 #[expect(
     dead_code,
@@ -34,6 +27,11 @@ mod l2cap;
     reason = "the internal Classic protocol is consumed by the T06d host slice"
 )]
 mod sdp;
+#[expect(
+    dead_code,
+    reason = "the internal USB transport is connected to the public session in T06f"
+)]
+mod usb;
 mod values;
 
 pub use values::{AddressKind, BluetoothAddress, BluetoothUuid, ClassicBond, ValueError};
