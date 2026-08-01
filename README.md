@@ -13,6 +13,5 @@ The extraction baseline is `niart120/bumble-rs` revision
 `cb55e2d98dc7b7b0227c43772c9ae184034dd9a1`. Derived source retains the
 Apache-2.0 license and attribution in `LICENSE` and `NOTICE`.
 
-The crate remains `publish = false` until its protocol, transport, archive,
-and `swbt-rs` integration gates are complete. This repository does not grant
-authorization to publish it.
+Version 0.1.0 is a release candidate. Publishing it is irreversible and
+requires explicit authorization separate from this repository state.

@@ -10,7 +10,7 @@ repository = "https://github.com/niart120/bumble-rs"
 readme = "README.md"
 keywords = ["bluetooth", "classic", "hid", "hci"]
 categories = ["hardware-support"]
-publish = false
+publish = true
 include = ["src/**", "tests/**", "README.md", "LICENSE", "NOTICE"]
 
 [dependencies]
