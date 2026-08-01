@@ -6,6 +6,18 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the internal codec is consumed by the T06c-T06e extraction slices"
+    )
+)]
+mod hci;
+mod values;
+
+pub use values::{AddressKind, BluetoothAddress, BluetoothUuid, ClassicBond, ValueError};
+
 /// Fixed Bumble fork revision used as the extraction baseline.
 pub const EXTRACTION_SOURCE_REVISION: &str = "cb55e2d98dc7b7b0227c43772c9ae184034dd9a1";
 
