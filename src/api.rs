@@ -308,6 +308,22 @@ impl StdError for BondStoreError {}
 
 /// Storage boundary for Classic link keys used by pairing and reconnect.
 pub trait BondStore: Send {
+    /// Selects the namespace for the initialized local controller address.
+    ///
+    /// The session calls this once after HCI initialization and before any
+    /// bond lookup. Stores without local-controller namespaces may keep the
+    /// default no-op implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BondStoreError`] when the selected namespace cannot be used.
+    fn select_local_address(
+        &mut self,
+        _local_address: BluetoothAddress,
+    ) -> Result<(), BondStoreError> {
+        Ok(())
+    }
+
     /// Loads the bond for one peer.
     ///
     /// # Errors
@@ -331,6 +347,13 @@ pub trait BondStore: Send {
 }
 
 impl<T: BondStore + ?Sized> BondStore for Box<T> {
+    fn select_local_address(
+        &mut self,
+        local_address: BluetoothAddress,
+    ) -> Result<(), BondStoreError> {
+        (**self).select_local_address(local_address)
+    }
+
     fn load(&self, peer: BluetoothAddress) -> Result<Option<ClassicBond>, BondStoreError> {
         (**self).load(peer)
     }

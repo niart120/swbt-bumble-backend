@@ -285,13 +285,16 @@ struct ProtocolChannel {
 }
 
 impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
-    fn initialize(mut io: T, config: SessionConfig, bonds: B) -> Result<Self, Error> {
+    fn initialize(mut io: T, config: SessionConfig, mut bonds: B) -> Result<Self, Error> {
         let initialized = initialize_controller(&mut io, &config)?;
         let capabilities = Capabilities::new(
             initialized.local_address,
             initialized.version,
             io.metadata(),
         );
+        bonds
+            .select_local_address(capabilities.local_address())
+            .map_err(|source| Error::with_source(ErrorKind::InvalidBondStore, source))?;
         let mut host = ClassicHost::new(
             bonds,
             usize::from(initialized.acl_packet_length),
@@ -1269,6 +1272,10 @@ mod tests {
 
         assert_eq!(session.capabilities.local_address(), local_address());
         assert_eq!(
+            session.host.bond_store().selected_local_address,
+            Some(local_address())
+        );
+        assert_eq!(
             session.capabilities.controller_version().company_identifier,
             10
         );
@@ -1832,9 +1839,18 @@ mod tests {
     #[derive(Default)]
     struct MemoryBondStore {
         bonds: HashMap<BluetoothAddress, ClassicBond>,
+        selected_local_address: Option<BluetoothAddress>,
     }
 
     impl BondStore for MemoryBondStore {
+        fn select_local_address(
+            &mut self,
+            local_address: BluetoothAddress,
+        ) -> Result<(), BondStoreError> {
+            self.selected_local_address = Some(local_address);
+            Ok(())
+        }
+
         fn load(&self, peer: BluetoothAddress) -> Result<Option<ClassicBond>, BondStoreError> {
             Ok(self.bonds.get(&peer).cloned())
         }
