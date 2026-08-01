@@ -532,23 +532,25 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
 
     fn refresh_outgoing_channels(&mut self) -> Result<(), Error> {
         let control = self.protocols.control.filter(|channel| !channel.open);
-        if let Some(channel) = control
-            && self
+        if let Some(channel) = control {
+            if self
                 .host
                 .channel_info(channel.cid)
                 .is_some_and(|(_, _, open)| open)
-        {
-            self.on_channel_opened(HID_CONTROL_PSM, channel.cid)?;
+            {
+                self.on_channel_opened(HID_CONTROL_PSM, channel.cid)?;
+            }
         }
 
         let interrupt = self.protocols.interrupt.filter(|channel| !channel.open);
-        if let Some(channel) = interrupt
-            && self
+        if let Some(channel) = interrupt {
+            if self
                 .host
                 .channel_info(channel.cid)
                 .is_some_and(|(_, _, open)| open)
-        {
-            self.on_channel_opened(HID_INTERRUPT_PSM, channel.cid)?;
+            {
+                self.on_channel_opened(HID_INTERRUPT_PSM, channel.cid)?;
+            }
         }
         Ok(())
     }
