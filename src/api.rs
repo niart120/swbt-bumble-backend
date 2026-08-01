@@ -563,8 +563,8 @@ pub(crate) trait SessionDriver: Send {
 
 /// Opaque, owned Bluetooth Classic HID session.
 ///
-/// Construction is added with controller initialization in the next TDD item;
-/// its operation boundary is fixed here without exposing HCI or L2CAP types.
+/// The session owns controller initialization, the USB packet reader, and the
+/// Classic protocol state without exposing HCI or L2CAP types.
 pub struct Session {
     pub(crate) driver: Box<dyn SessionDriver>,
 }

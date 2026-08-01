@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
@@ -246,12 +246,13 @@ enum ConnectionWindow {
 }
 
 struct BackendSession<T: HciIo, B: BondStore> {
-    io: T,
+    io: Option<T>,
     capabilities: Capabilities,
     config: SessionConfig,
     host: ClassicHost<B>,
     window: ConnectionWindow,
     connection: Option<(BluetoothAddress, u16)>,
+    rejected_connections: BTreeSet<u16>,
     protocols: ProtocolState,
     active_reconnect: bool,
     terminal: Option<Error>,
@@ -306,12 +307,13 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
             .map_err(|source| Error::with_source(ErrorKind::OpenFailed, source))?;
         }
         Ok(Self {
-            io,
+            io: Some(io),
             capabilities,
             config,
             host,
             window: ConnectionWindow::Idle,
             connection: None,
+            rejected_connections: BTreeSet::new(),
             protocols: ProtocolState::default(),
             active_reconnect: false,
             terminal: None,
@@ -330,10 +332,16 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
         }
     }
 
+    fn io_mut(&mut self) -> Result<&mut T, Error> {
+        self.io
+            .as_mut()
+            .ok_or_else(|| Error::new(ErrorKind::Closed))
+    }
+
     fn send_command(&mut self, opcode: u16, parameters: Vec<u8>) -> Result<(), Error> {
         let command = CommandPacket::new(opcode, parameters)
             .map_err(|source| Error::with_source(ErrorKind::ProtocolViolation, source))?;
-        self.io.send(&Packet::Command(command))
+        self.io_mut()?.send(&Packet::Command(command))
     }
 
     fn set_scan(&mut self, discoverable: bool, connectable: bool) -> Result<(), Error> {
@@ -425,6 +433,7 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
                 let mut parameters = handle.to_le_bytes().to_vec();
                 parameters.push(AUTHENTICATION_FAILURE);
                 self.send_command(HCI_DISCONNECT, parameters)?;
+                self.rejected_connections.insert(handle);
                 return Ok(());
             }
             if status != 0 {
@@ -433,6 +442,14 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
                 self.enqueue_event(Event::Disconnected {
                     reason: Some(status),
                 });
+            }
+        }
+
+        if event.event_code == EVENT_DISCONNECTION_COMPLETE {
+            require_len(&event.parameters, 4, "disconnection complete")?;
+            let handle = u16::from_le_bytes([event.parameters[1], event.parameters[2]]);
+            if event.parameters[0] == 0 && self.rejected_connections.remove(&handle) {
+                return Ok(());
             }
         }
 
@@ -447,8 +464,8 @@ impl<T: HciIo + 'static, B: BondStore + 'static> BackendSession<T, B> {
     fn drain_host_output(&mut self) -> Result<(), Error> {
         while let Some(output) = self.host.pop_output() {
             match output {
-                HostOutput::Command(command) => self.io.send(&Packet::Command(command))?,
-                HostOutput::Acl(packet) => self.io.send(&Packet::Acl(packet))?,
+                HostOutput::Command(command) => self.io_mut()?.send(&Packet::Command(command))?,
+                HostOutput::Acl(packet) => self.io_mut()?.send(&Packet::Acl(packet))?,
                 HostOutput::Event(SessionEvent::Connected {
                     peer,
                     connection_handle,
@@ -722,14 +739,16 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
     fn poll(&mut self, timeout: Duration) -> Result<Vec<Event>, Error> {
         self.ensure_active()?;
         if self.pending_events.is_empty() {
-            match self.io.recv_timeout(timeout) {
+            let received = self.io_mut()?.recv_timeout(timeout);
+            match received {
                 Ok(Some(packet)) => self.handle_polled_packet(packet)?,
                 Ok(None) => {}
                 Err(error) => return Err(self.record_terminal(error)),
             }
         }
         loop {
-            match self.io.recv_timeout(Duration::ZERO) {
+            let received = self.io_mut()?.recv_timeout(Duration::ZERO);
+            match received {
                 Ok(Some(packet)) => self.handle_polled_packet(packet)?,
                 Ok(None) => break,
                 Err(error) => return Err(self.record_terminal(error)),
@@ -764,17 +783,32 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
         self.drain_host_output()
     }
 
-    fn drain_interrupt(&mut self, _timeout: Duration) -> Result<(), Error> {
+    fn drain_interrupt(&mut self, timeout: Duration) -> Result<(), Error> {
         self.ensure_active()?;
-        if self.host.channel_output_is_flushed() {
-            Ok(())
-        } else {
-            Err(Error::new(ErrorKind::DrainTimedOut))
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+        loop {
+            if self.host.channel_output_is_flushed() {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::new(ErrorKind::DrainTimedOut));
+            }
+            let received = self.io_mut()?.recv_timeout(remaining);
+            match received {
+                Ok(Some(packet)) => self.handle_polled_packet(packet)?,
+                Ok(None) => return Err(Error::new(ErrorKind::DrainTimedOut)),
+                Err(error) => return Err(self.record_terminal(error)),
+            }
         }
     }
 
     fn disconnect(&mut self) -> Result<(), Error> {
         self.ensure_active()?;
+        self.protocols = ProtocolState::default();
+        self.active_reconnect = false;
         if let Some((_, handle)) = self.connection.take() {
             let mut parameters = handle.to_le_bytes().to_vec();
             parameters.push(REMOTE_USER_TERMINATED_CONNECTION);
@@ -788,7 +822,18 @@ impl<T: HciIo + 'static, B: BondStore + 'static> SessionDriver for BackendSessio
             return Ok(());
         }
         self.closed = true;
-        self.io.close()
+        self.connection = None;
+        self.rejected_connections.clear();
+        self.window = ConnectionWindow::Idle;
+        self.protocols = ProtocolState::default();
+        self.active_reconnect = false;
+        self.pending_events.clear();
+        let Some(mut io) = self.io.take() else {
+            return Ok(());
+        };
+        let result = io.close();
+        drop(io);
+        result
     }
 }
 
@@ -1523,6 +1568,144 @@ mod tests {
     }
 
     #[test]
+    fn drain_interrupt_processes_completed_packets_until_host_queue_is_empty() {
+        let (mut io, _) = ScriptedIo::initialization();
+        io.responses[6] = Ok(Some(command_complete(
+            HCI_READ_BUFFER_SIZE,
+            vec![8, 0, 0, 64, 0, 0, 0],
+        )));
+        let responses = io.live_responses.clone();
+        let host_acl = io.acl_packets.clone();
+        let mut bonds = MemoryBondStore::default();
+        bonds
+            .bonds
+            .insert(PEER, ClassicBond::new([0xB6; 16], 4, true));
+        let mut session = BackendSession::initialize(io, config(), bonds).unwrap();
+        session.start_reconnect().unwrap();
+        responses.lock().unwrap().extend([
+            Packet::Event(event(
+                EVENT_CONNECTION_COMPLETE,
+                [&[0, 0x40, 0], PEER.as_le_bytes().as_slice(), &[1, 0]].concat(),
+            )),
+            Packet::Event(event(EVENT_ENCRYPTION_CHANGE, vec![0, 0x40, 0, 1])),
+        ]);
+        assert_eq!(
+            session.poll(Duration::ZERO).unwrap(),
+            [Event::Connected { peer: PEER }]
+        );
+
+        let mut peer = TestPeer::new(0x0040, responses.clone(), host_acl);
+        for psm in [HID_CONTROL_PSM, HID_INTERRUPT_PSM] {
+            peer.channels
+                .register_server(
+                    Some(psm),
+                    ClassicChannelSpec {
+                        mtu: CLASSIC_SERVER_MTU,
+                    },
+                )
+                .unwrap();
+        }
+        peer.pump(&mut session);
+        session.send_interrupt(&[0x55; 600]).unwrap();
+        assert!(!session.host.channel_output_is_flushed());
+        responses.lock().unwrap().push_back(Packet::Event(event(
+            EVENT_NUMBER_OF_COMPLETED_PACKETS,
+            vec![1, 0x40, 0, 64, 0],
+        )));
+
+        session.drain_interrupt(Duration::from_secs(1)).unwrap();
+        assert!(session.host.channel_output_is_flushed());
+    }
+
+    #[test]
+    fn close_releases_hci_io_clears_pending_input_and_is_idempotent() {
+        let (io, _) = ScriptedIo::initialization();
+        let trace = Arc::new(Mutex::new(Vec::new()));
+        let lifecycle_io = LifecycleIo {
+            inner: io,
+            trace: trace.clone(),
+        };
+        let mut session =
+            BackendSession::initialize(lifecycle_io, config(), MemoryBondStore::default()).unwrap();
+        session.enqueue_event(Event::Disconnected { reason: None });
+
+        session.close().unwrap();
+
+        let observed = trace.lock().unwrap().clone();
+        assert_eq!(observed, ["close", "drop"]);
+        assert!(session.pending_events.is_empty());
+        assert_eq!(
+            session.poll(Duration::ZERO).unwrap_err().kind(),
+            ErrorKind::Closed
+        );
+        session.close().unwrap();
+        let observed = trace.lock().unwrap().clone();
+        assert_eq!(observed, ["close", "drop"]);
+    }
+
+    #[test]
+    fn disconnect_is_idempotent_and_immediately_rejects_more_interrupt_input() {
+        let (io, commands) = ScriptedIo::initialization();
+        let mut session =
+            BackendSession::initialize(io, config(), MemoryBondStore::default()).unwrap();
+        session.connection = Some((PEER, 0x0040));
+        session.window = ConnectionWindow::Connected;
+        session.protocols.interrupt = Some(ProtocolChannel {
+            cid: 0x0041,
+            open: true,
+        });
+        assert!(session.interrupt_send_capacity_available());
+
+        session.disconnect().unwrap();
+        session.disconnect().unwrap();
+
+        assert!(!session.interrupt_send_capacity_available());
+        assert_eq!(
+            session.send_interrupt(&[0x01]).unwrap_err().kind(),
+            ErrorKind::SendRejected
+        );
+        let commands = commands.lock().unwrap();
+        let disconnects = commands
+            .iter()
+            .filter(|command| command.opcode == HCI_DISCONNECT)
+            .collect::<Vec<_>>();
+        assert_eq!(disconnects.len(), 1);
+        assert_eq!(
+            disconnects[0].parameters,
+            [0x40, 0, REMOTE_USER_TERMINATED_CONNECTION]
+        );
+    }
+
+    #[test]
+    fn rejected_connection_completion_does_not_poison_the_session() {
+        let (io, commands) = ScriptedIo::initialization();
+        let responses = io.live_responses.clone();
+        let mut session =
+            BackendSession::initialize(io, config(), MemoryBondStore::default()).unwrap();
+        responses.lock().unwrap().push_back(Packet::Event(event(
+            EVENT_CONNECTION_COMPLETE,
+            [&[0, 0x44, 0], PEER.as_le_bytes().as_slice(), &[1, 0]].concat(),
+        )));
+
+        assert!(session.poll(Duration::ZERO).unwrap().is_empty());
+        assert!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|command| command.opcode == HCI_DISCONNECT
+                    && command.parameters == [0x44, 0, AUTHENTICATION_FAILURE])
+        );
+        responses.lock().unwrap().push_back(Packet::Event(event(
+            EVENT_DISCONNECTION_COMPLETE,
+            vec![0, 0x44, 0, REMOTE_USER_TERMINATED_CONNECTION],
+        )));
+
+        assert!(session.poll(Duration::ZERO).unwrap().is_empty());
+        session.start_pairing().unwrap();
+    }
+
+    #[test]
     fn rewritten_identity_mismatch_requires_recovery() {
         assert_eq!(
             identity_mismatch_kind(Some(AdapterIdentityPreparation::Rewritten)),
@@ -1732,6 +1915,39 @@ mod tests {
 
         fn close(&mut self) -> Result<(), Error> {
             Ok(())
+        }
+    }
+
+    struct LifecycleIo {
+        inner: ScriptedIo,
+        trace: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl HciIo for LifecycleIo {
+        fn send(&mut self, packet: &Packet) -> Result<(), Error> {
+            self.inner.send(packet)
+        }
+
+        fn recv_timeout(&mut self, timeout: Duration) -> Result<Option<Packet>, Error> {
+            self.inner.recv_timeout(timeout)
+        }
+
+        fn metadata(&self) -> UsbAdapterMetadata {
+            self.inner.metadata()
+        }
+
+        fn close(&mut self) -> Result<(), Error> {
+            self.trace.lock().unwrap().push("close");
+            Ok(())
+        }
+    }
+
+    impl Drop for LifecycleIo {
+        fn drop(&mut self) {
+            self.trace
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push("drop");
         }
     }
 

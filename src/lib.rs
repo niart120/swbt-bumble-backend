@@ -1,15 +1,14 @@
 //! Bluetooth Classic HID backend extracted for `swbt-rs`.
 //!
-//! This package is not yet published. The first implementation slices keep
-//! all Bumble-derived protocol and transport types private; the stable
-//! session API will be added only after those slices have behavioral tests.
+//! This package is not yet published. Bumble-derived protocol and transport
+//! types remain private behind the owned [`Session`] API.
 
 #![forbid(unsafe_code)]
 
 mod api;
 #[expect(
     dead_code,
-    reason = "the internal Classic host is connected to the public session in T06f"
+    reason = "the private host retains tested helpers used by extracted protocol fixtures"
 )]
 mod classic_host;
 mod csr;
@@ -17,24 +16,24 @@ mod hci;
 mod hid_service;
 #[expect(
     dead_code,
-    reason = "the internal Classic protocol is consumed by the T06d host slice"
+    reason = "the private HIDP codec retains tested message forms outside the session subset"
 )]
 mod hidp;
 mod identity;
 #[expect(
     dead_code,
-    reason = "the internal Classic protocol is consumed by the T06d host slice"
+    reason = "the private L2CAP codec retains tested ERTM paths outside the session subset"
 )]
 mod l2cap;
 #[expect(
     dead_code,
-    reason = "the internal Classic protocol is consumed by the T06d host slice"
+    reason = "the private SDP codec retains tested client paths outside the session subset"
 )]
 mod sdp;
 mod session;
 #[expect(
     dead_code,
-    reason = "the internal USB transport is connected to the public session in T06f"
+    reason = "the private USB transport retains scripted test helpers outside the session subset"
 )]
 mod usb;
 mod values;

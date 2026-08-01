@@ -4,7 +4,7 @@
 [`swbt-rs`](https://github.com/niart120/swbt-rs). It is not published yet.
 
 The package boundary is intentionally narrower than the Bumble workspace. It
-will contain USB HCI, the required HCI command/event/ACL codecs, Bluetooth
+contains USB HCI, the required HCI command/event/ACL codecs, Bluetooth
 Classic pairing and reconnect state, Classic L2CAP, SDP, HIDP, and ordered
 session shutdown. LE GATT/ATT/SMP, audio profiles, RFCOMM, serial, WebSocket,
 and gRPC transports are outside its scope.
