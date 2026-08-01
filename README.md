@@ -27,9 +27,17 @@ crates.io release. Supported Rust versions are declared by `rust-version` in
 
 ## Provenance
 
-The extraction baseline is `niart120/bumble-rs` revision
-`cb55e2d98dc7b7b0227c43772c9ae184034dd9a1`. Derived source retains the
-Apache-2.0 license and attribution in `LICENSE` and `NOTICE`.
+The upstream source baseline is
+[`chaitanyarahalkar/bumble-rs@bbac2a6`](https://github.com/chaitanyarahalkar/bumble-rs/commit/bbac2a6803b8cab0920ab725a23aa408fc4fed85).
+That source received three `swbt-rs`-required host and transport changes in
+[`niart120/bumble-rs`](https://github.com/niart120/bumble-rs) through revision
+`cb55e2d98dc7b7b0227c43772c9ae184034dd9a1`. This crate was then extracted
+from that fork revision and further modified as a standalone backend.
+
+[PROVENANCE.md](PROVENANCE.md) maps the derived files to their source paths
+and summarizes the changes. The Apache-2.0 license, upstream attribution, and
+modification notices are retained in `LICENSE`, `NOTICE`, and the derived
+source files.
 
 ## Security
 

@@ -1,8 +1,9 @@
 //! Bluetooth Human Interface Device Profile (HIDP) codec and synchronous
 //! host/device dispatch.
 //!
-//! Derived from bumble-hid at cb55e2d and modified to leave L2CAP channel
-//! ownership with the backend Classic session.
+//! Derived from chaitanyarahalkar/bumble-rs at `bbac2a6` via the modified
+//! niart120/bumble-rs fork at `cb55e2d`. Modified to leave L2CAP channel
+//! ownership with the backend Classic session. See `PROVENANCE.md`.
 
 use core::fmt;
 

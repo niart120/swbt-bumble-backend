@@ -1,5 +1,7 @@
 //! Classic L2CAP frame, signaling, channel, and ERTM support derived from
-//! bumble-l2cap at cb55e2d and modified for the swbt-bumble-backend package.
+//! chaitanyarahalkar/bumble-rs at `bbac2a6` via the modified
+//! niart120/bumble-rs fork at `cb55e2d`. Modified for the Classic-only package
+//! boundary; see `PROVENANCE.md`.
 //!
 //! bumble-l2cap — a Rust port of the L2CAP frame codec from
 //! [`google/bumble`](https://github.com/google/bumble).

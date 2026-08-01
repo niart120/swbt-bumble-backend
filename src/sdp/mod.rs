@@ -1,5 +1,7 @@
-//! SDP codec and transport-neutral service runtime derived from bumble-sdp at
-//! cb55e2d and modified for the swbt-bumble-backend package.
+//! SDP codec and transport-neutral service runtime derived from
+//! chaitanyarahalkar/bumble-rs at `bbac2a6` via the modified
+//! niart120/bumble-rs fork at `cb55e2d`. Modified for the transport-neutral
+//! backend boundary; see `PROVENANCE.md`.
 //!
 //! bumble-sdp — a Rust port of the Service Discovery Protocol (SDP) codec from
 //! [`google/bumble`](https://github.com/google/bumble).

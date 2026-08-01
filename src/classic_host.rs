@@ -1,5 +1,6 @@
-// Derived from bumble-host Classic state handling at cb55e2d. Rewritten for
-// the swbt-bumble-backend Classic HID boundary without LE/GATT/SMP state.
+// Derived from chaitanyarahalkar/bumble-rs at bbac2a6 via the modified
+// niart120/bumble-rs fork at cb55e2d. Rewritten for the Classic HID boundary
+// without LE/GATT/SMP state. See PROVENANCE.md.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;

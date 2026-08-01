@@ -1,19 +1,33 @@
 swbt-bumble-backend
-Copyright 2026 The bumble-rs contributors
 Copyright 2026 niart120
 
-This product contains modified source derived from bumble-rs
-(https://github.com/chaitanyarahalkar/bumble-rs) and its Rust port of parts of
-Google's Bumble Bluetooth stack (https://github.com/google/bumble). Those
-works are licensed under the Apache License, Version 2.0.
+This product contains modified source derived from bumble-rs. The following
+attribution notice is reproduced from chaitanyarahalkar/bumble-rs revision
+bbac2a6803b8cab0920ab725a23aa408fc4fed85:
 
-The extraction baseline is niart120/bumble-rs revision
-cb55e2d98dc7b7b0227c43772c9ae184034dd9a1. The modifications reorganize the
-required Bluetooth Classic HID behavior into one package, remove unrelated
-protocol and transport surfaces, and introduce a backend-specific API for
-swbt-rs.
+--- BEGIN UPSTREAM NOTICE ---
+bumble-rs
+Copyright 2026 The bumble-rs contributors
 
-Wire formats, constants, and protocol test vectors are derived from the
-projects above and from the Bluetooth Core Specification.
+This product is an independent Rust port of parts of Google's Bumble
+Bluetooth stack (https://github.com/google/bumble), which is licensed under
+the Apache License, Version 2.0. Wire formats, constants, and cryptographic
+test vectors are derived from that project and from the Bluetooth Core
+Specification.
 
 Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+--- END UPSTREAM NOTICE ---
+
+Modifications by niart120:
+
+- The upstream source baseline is chaitanyarahalkar/bumble-rs revision
+  bbac2a6803b8cab0920ab725a23aa408fc4fed85.
+- The intermediate niart120/bumble-rs fork adds reader shutdown, host-side ACL
+  flush state, and vendor command responses through revision
+  cb55e2d98dc7b7b0227c43772c9ae184034dd9a1.
+- swbt-bumble-backend extracts the required Bluetooth Classic HID behavior,
+  removes unrelated protocol and transport surfaces, combines the retained
+  code into one package, and introduces an owned backend API for swbt-rs.
+
+Modified and ported files carry file-level change notices. PROVENANCE.md maps
+the distributed files to their source paths and summarizes the changes.

@@ -1,3 +1,7 @@
+// Originally implemented in niart120/swbt-rs at b61476f. Moved and modified
+// so CSR volatile-address rewrite, USB re-enumeration, and readback form one
+// fail-closed backend operation. See PROVENANCE.md.
+
 use std::{error::Error as StdError, fmt, time::Duration};
 
 use super::csr::{
@@ -766,6 +770,3 @@ mod tests {
             .collect()
     }
 }
-// Moved from swbt-rs unit_010 into the backend during T06f2. This state machine
-// keeps CSR volatile-address rewrite, USB re-enumeration, and readback as one
-// fail-closed operation.

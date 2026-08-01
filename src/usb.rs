@@ -1,5 +1,7 @@
-// Derived from bumble-transport USB HCI support at cb55e2d. Rewritten for
-// command/event/ACL only and without direct libusb1-sys or isochronous code.
+// Derived from chaitanyarahalkar/bumble-rs at bbac2a6 via the modified
+// niart120/bumble-rs fork at cb55e2d. Rewritten for command/event/ACL only,
+// bounded reader shutdown, and no direct libusb1-sys or isochronous code.
+// See PROVENANCE.md.
 
 use std::collections::VecDeque;
 use std::fmt;

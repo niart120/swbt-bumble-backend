@@ -1,6 +1,6 @@
-// Moved from swbt-rs unit_010 into the backend during T06f2. The CSR BCCMD
-// layout is retained byte-for-byte so explicit local identities remain an
-// implementation detail of backend session opening.
+// Originally implemented in niart120/swbt-rs at b61476f. Moved and modified
+// for the private backend HCI boundary while retaining the CSR BCCMD layout.
+// See PROVENANCE.md.
 
 use std::fmt;
 

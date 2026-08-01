@@ -6,8 +6,9 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-// Derived from bumble-l2cap at cb55e2d and modified for the
-// swbt-bumble-backend Classic-only package boundary.
+// Derived from chaitanyarahalkar/bumble-rs at bbac2a6 via the modified
+// niart120/bumble-rs fork at cb55e2d. Rewritten as synchronous sans-I/O
+// Classic channel state. See PROVENANCE.md.
 
 use super::ertm::{ErtmConfig, ErtmEngine};
 use super::{

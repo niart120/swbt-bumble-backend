@@ -25,7 +25,8 @@
 //! 3. **Client and server agree end-to-end** for all three query types,
 //!    including the invalid-handle error path.
 //!
-//! Ported from bumble-sdp at cb55e2d.
+//! Ported and modified from chaitanyarahalkar/bumble-rs at `bbac2a6` via the
+//! modified niart120/bumble-rs fork at `cb55e2d`. See `PROVENANCE.md`.
 
 use crate::BluetoothUuid as Uuid;
 

@@ -1,3 +1,7 @@
+// Adapted from swbt-rs transport behavior and from the Bumble-derived host and
+// transport modules identified in PROVENANCE.md. Rewritten as an owned backend
+// session with bounded events, flow control, and ordered shutdown.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::sync::mpsc::RecvTimeoutError;

@@ -1,7 +1,9 @@
 //! The SDP service runtime — a synchronous port of upstream's asyncio
 //! `Client` and `Server`.
 //!
-//! Derived from bumble-sdp at cb55e2d and modified for this package.
+//! Derived from chaitanyarahalkar/bumble-rs at `bbac2a6` via the modified
+//! niart120/bumble-rs fork at `cb55e2d`. Modified for the synchronous internal
+//! service runtime; see `PROVENANCE.md`.
 //!
 //! **Slice 20.** The crate root is the codec (`DataElement`, `ServiceAttribute`,
 //! `SdpPdu`); this module is the request/response machinery on top: a

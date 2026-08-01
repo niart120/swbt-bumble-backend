@@ -1,6 +1,8 @@
 //! The seven SDP Protocol Data Units (Vol 3, Part B - 4.4–4.7).
 //!
-//! Derived from bumble-sdp at cb55e2d and modified for this package.
+//! Derived from chaitanyarahalkar/bumble-rs at `bbac2a6` via the modified
+//! niart120/bumble-rs fork at `cb55e2d`. Modified for this package; see
+//! `PROVENANCE.md`.
 //!
 //! Every PDU shares the framing
 //! `[pdu-id: u8][transaction-id: u16 BE][parameter-length: u16 BE][parameters…]`

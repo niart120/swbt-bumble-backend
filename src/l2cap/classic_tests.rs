@@ -1,4 +1,5 @@
-// Ported from bumble-l2cap at cb55e2d.
+// Ported and modified from chaitanyarahalkar/bumble-rs at bbac2a6 via the
+// modified niart120/bumble-rs fork at cb55e2d. See PROVENANCE.md.
 
 use super::CONNECTION_REFUSED_PSM_NOT_SUPPORTED;
 use super::classic::{ChannelManager, ClassicChannelSpec, ClassicChannelState};

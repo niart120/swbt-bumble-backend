@@ -10,3 +10,5 @@ This file records user-visible changes to `swbt-bumble-backend`.
   L2CAP, SDP, HIDP reports, flow control, and ordered shutdown.
 - Preserve the Apache-2.0 license and attribution of the Bumble-derived
   implementation.
+- Record the exact upstream and intermediate-fork revisions, source mapping,
+  and file-level modification notices.

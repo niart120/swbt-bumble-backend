@@ -1,6 +1,6 @@
-// Moved from swbt-rs unit_010 during backend T06f3 and adapted to the
-// backend-owned SDP and HIDP codecs. L2CAP channel ownership remains in the
-// private session runtime.
+// Originally implemented in niart120/swbt-rs at a36a69b. Moved and modified
+// for the backend-owned SDP and HIDP codecs; L2CAP channel ownership remains
+// in the private session runtime. See PROVENANCE.md.
 
 use std::fmt;
 

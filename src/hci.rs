@@ -1,5 +1,6 @@
-// Derived from bumble-hci packet framing at cb55e2d. Rewritten to retain
-// command, event, and ACL families only; SCO and ISO are intentionally absent.
+// Derived from chaitanyarahalkar/bumble-rs at bbac2a6 via the modified
+// niart120/bumble-rs fork at cb55e2d. Rewritten to retain command, event, and
+// ACL families only; SCO and ISO are intentionally absent. See PROVENANCE.md.
 
 use std::collections::BTreeMap;
 use std::fmt;

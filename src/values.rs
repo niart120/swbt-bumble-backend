@@ -1,5 +1,6 @@
-// Derived from bumble-rs core values at cb55e2d. Rewritten for the
-// swbt-bumble-backend public boundary and reduced to Classic HID needs.
+// Derived from chaitanyarahalkar/bumble-rs at bbac2a6 via the modified
+// niart120/bumble-rs fork at cb55e2d. Rewritten for the public backend
+// boundary and reduced to Classic HID needs. See PROVENANCE.md.
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
