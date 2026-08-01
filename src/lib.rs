@@ -14,6 +14,21 @@
     )
 )]
 mod hci;
+#[expect(
+    dead_code,
+    reason = "the internal Classic protocol is consumed by the T06d host slice"
+)]
+mod hidp;
+#[expect(
+    dead_code,
+    reason = "the internal Classic protocol is consumed by the T06d host slice"
+)]
+mod l2cap;
+#[expect(
+    dead_code,
+    reason = "the internal Classic protocol is consumed by the T06d host slice"
+)]
+mod sdp;
 mod values;
 
 pub use values::{AddressKind, BluetoothAddress, BluetoothUuid, ClassicBond, ValueError};

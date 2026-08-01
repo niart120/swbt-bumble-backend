@@ -135,6 +135,10 @@ impl BluetoothUuid {
         }
     }
 
+    pub(crate) fn from_16_bits(value: u16) -> Self {
+        Self::from_u16(value)
+    }
+
     /// Creates a UUID from its 2-, 4-, or 16-byte little-endian form.
     ///
     /// # Errors
@@ -151,9 +155,21 @@ impl BluetoothUuid {
         }
     }
 
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, ValueError> {
+        Self::from_le_bytes(bytes)
+    }
+
     /// Returns the UUID in its original little-endian width.
     pub fn as_le_bytes(&self) -> &[u8] {
         &self.bytes_le
+    }
+
+    pub(crate) fn to_bytes(&self, force_128: bool) -> Vec<u8> {
+        if force_128 {
+            self.expanded_le_bytes().to_vec()
+        } else {
+            self.bytes_le.clone()
+        }
     }
 
     /// Returns the 128-bit Bluetooth-base expansion in little-endian order.
