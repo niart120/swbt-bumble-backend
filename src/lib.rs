@@ -1,7 +1,7 @@
 //! Bluetooth Classic HID backend extracted for `swbt-rs`.
 //!
-//! This package is not yet published. Bumble-derived protocol and transport
-//! types remain private behind the owned [`Session`] API.
+//! Bumble-derived protocol and transport types remain private behind the owned
+//! [`Session`] API.
 
 #![forbid(unsafe_code)]
 
