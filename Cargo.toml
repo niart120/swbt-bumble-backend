@@ -1,0 +1,19 @@
+[package]
+name = "swbt-bumble-backend"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.87"
+license = "Apache-2.0"
+authors = ["The bumble-rs contributors", "niart120"]
+description = "Bluetooth Classic HID backend extracted for swbt-rs"
+repository = "https://github.com/niart120/bumble-rs"
+readme = "README.md"
+keywords = ["bluetooth", "classic", "hid", "hci"]
+categories = ["hardware-support"]
+publish = false
+include = ["src/**", "tests/**", "README.md", "LICENSE", "NOTICE"]
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"

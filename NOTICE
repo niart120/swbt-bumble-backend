@@ -1,0 +1,19 @@
+swbt-bumble-backend
+Copyright 2026 The bumble-rs contributors
+Copyright 2026 niart120
+
+This product contains modified source derived from bumble-rs
+(https://github.com/chaitanyarahalkar/bumble-rs) and its Rust port of parts of
+Google's Bumble Bluetooth stack (https://github.com/google/bumble). Those
+works are licensed under the Apache License, Version 2.0.
+
+The extraction baseline is niart120/bumble-rs revision
+cb55e2d98dc7b7b0227c43772c9ae184034dd9a1. The modifications reorganize the
+required Bluetooth Classic HID behavior into one package, remove unrelated
+protocol and transport surfaces, and introduce a backend-specific API for
+swbt-rs.
+
+Wire formats, constants, and protocol test vectors are derived from the
+projects above and from the Bluetooth Core Specification.
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
