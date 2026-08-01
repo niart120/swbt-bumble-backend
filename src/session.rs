@@ -1332,6 +1332,17 @@ mod tests {
     }
 
     #[test]
+    fn bond_store_namespace_failure_is_a_typed_open_error() {
+        let (io, _) = ScriptedIo::initialization();
+
+        let error = BackendSession::initialize(io, config(), FailingNamespaceBondStore)
+            .err()
+            .expect("namespace selection failure must stop initialization");
+
+        assert_eq!(error.kind(), ErrorKind::InvalidBondStore);
+    }
+
+    #[test]
     fn pairing_latches_one_peer_and_converts_connection_events() {
         let (io, commands) = ScriptedIo::initialization();
         let responses = io.live_responses.clone();
@@ -1840,6 +1851,33 @@ mod tests {
     struct MemoryBondStore {
         bonds: HashMap<BluetoothAddress, ClassicBond>,
         selected_local_address: Option<BluetoothAddress>,
+    }
+
+    struct FailingNamespaceBondStore;
+
+    impl BondStore for FailingNamespaceBondStore {
+        fn select_local_address(
+            &mut self,
+            _local_address: BluetoothAddress,
+        ) -> Result<(), BondStoreError> {
+            Err(BondStoreError::LoadFailed)
+        }
+
+        fn load(&self, _peer: BluetoothAddress) -> Result<Option<ClassicBond>, BondStoreError> {
+            unreachable!("namespace selection must fail before bond lookup")
+        }
+
+        fn load_all(&self) -> Result<Vec<(BluetoothAddress, ClassicBond)>, BondStoreError> {
+            unreachable!("namespace selection must fail before bond listing")
+        }
+
+        fn upsert(
+            &mut self,
+            _peer: BluetoothAddress,
+            _bond: ClassicBond,
+        ) -> Result<(), BondStoreError> {
+            unreachable!("namespace selection must fail before bond update")
+        }
     }
 
     impl BondStore for MemoryBondStore {
