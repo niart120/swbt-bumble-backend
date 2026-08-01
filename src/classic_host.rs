@@ -18,7 +18,7 @@ const HCI_IO_CAPABILITY_REQUEST_REPLY: u16 = 0x042B;
 const HCI_USER_CONFIRMATION_REQUEST_REPLY: u16 = 0x042C;
 const HCI_ROLE_PERIPHERAL: u8 = 0x01;
 const HCI_IO_CAPABILITY_NO_INPUT_NO_OUTPUT: u8 = 0x03;
-const HCI_AUTHENTICATION_REQUIREMENTS_GENERAL_BONDING: u8 = 0x01;
+const HCI_AUTHENTICATION_REQUIREMENTS_DEDICATED_BONDING_NO_MITM: u8 = 0x02;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ClassicEvent {
@@ -320,7 +320,7 @@ impl<S: BondStore> ClassicHost<S> {
                 parameters.extend_from_slice(&[
                     HCI_IO_CAPABILITY_NO_INPUT_NO_OUTPUT,
                     0,
-                    HCI_AUTHENTICATION_REQUIREMENTS_GENERAL_BONDING,
+                    HCI_AUTHENTICATION_REQUIREMENTS_DEDICATED_BONDING_NO_MITM,
                 ]);
                 self.queue_command(HCI_IO_CAPABILITY_REQUEST_REPLY, parameters)?;
             }
@@ -641,18 +641,29 @@ mod tests {
         host.handle_event(ClassicEvent::UserConfirmationRequest { peer })
             .unwrap();
 
-        let opcodes = std::iter::from_fn(|| host.pop_output())
+        let commands = std::iter::from_fn(|| host.pop_output())
             .map(|output| match output {
-                HostOutput::Command(command) => command.opcode,
+                HostOutput::Command(command) => command,
                 other => panic!("unexpected output: {other:?}"),
             })
             .collect::<Vec<_>>();
         assert_eq!(
-            opcodes,
+            commands
+                .iter()
+                .map(|command| command.opcode)
+                .collect::<Vec<_>>(),
             [
                 HCI_ACCEPT_CONNECTION_REQUEST,
                 HCI_IO_CAPABILITY_REQUEST_REPLY,
                 HCI_USER_CONFIRMATION_REQUEST_REPLY,
+            ]
+        );
+        assert_eq!(
+            &commands[1].parameters[6..],
+            [
+                HCI_IO_CAPABILITY_NO_INPUT_NO_OUTPUT,
+                0,
+                HCI_AUTHENTICATION_REQUIREMENTS_DEDICATED_BONDING_NO_MITM,
             ]
         );
     }

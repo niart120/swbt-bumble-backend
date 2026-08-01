@@ -12,12 +12,14 @@ mod api;
     reason = "the internal Classic host is connected to the public session in T06f"
 )]
 mod classic_host;
+mod csr;
 mod hci;
 #[expect(
     dead_code,
     reason = "the internal Classic protocol is consumed by the T06d host slice"
 )]
 mod hidp;
+mod identity;
 #[expect(
     dead_code,
     reason = "the internal Classic protocol is consumed by the T06d host slice"
@@ -28,6 +30,7 @@ mod l2cap;
     reason = "the internal Classic protocol is consumed by the T06d host slice"
 )]
 mod sdp;
+mod session;
 #[expect(
     dead_code,
     reason = "the internal USB transport is connected to the public session in T06f"

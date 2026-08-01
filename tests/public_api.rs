@@ -6,6 +6,9 @@ use swbt_bumble_backend::{
     OpenOptions, Session, SessionConfig,
 };
 
+type OpenSession =
+    fn(OpenOptions, Box<dyn BondStore>) -> Result<Session, swbt_bumble_backend::Error>;
+
 fn hid_service() -> HidServiceConfig {
     HidServiceConfig::new(
         [0x05, 0x01, 0x09, 0x05],
@@ -87,6 +90,7 @@ fn session_facing_types_are_send_and_do_not_require_bumble_protocol_types() {
     assert_send::<Session>();
     assert_send::<Box<dyn BondStore>>();
     assert_sync::<ActivityNotifier>();
+    let _open: OpenSession = Session::open;
 
     let peer = BluetoothAddress::from_le_bytes([6, 5, 4, 3, 2, 1], AddressKind::Public);
     let events = [

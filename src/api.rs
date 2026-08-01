@@ -17,10 +17,6 @@ const MAX_COMPLETE_LOCAL_NAME_LEN: usize = EXTENDED_INQUIRY_RESPONSE_LEN - 2;
 pub struct AdapterSelector(Box<str>);
 
 impl AdapterSelector {
-    #[expect(
-        dead_code,
-        reason = "T06f2 consumes the selector when opening the USB session"
-    )]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
@@ -217,10 +213,6 @@ impl SessionConfig {
         &self.hid_service
     }
 
-    #[expect(
-        dead_code,
-        reason = "T06f2 consumes the padded EIR during controller initialization"
-    )]
     pub(crate) const fn extended_inquiry_response(&self) -> &[u8; EXTENDED_INQUIRY_RESPONSE_LEN] {
         &self.extended_inquiry_response
     }
@@ -272,10 +264,6 @@ impl OpenOptions {
         self.local_identity
     }
 
-    #[expect(
-        dead_code,
-        reason = "T06f2 consumes the options when opening the USB session"
-    )]
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -342,6 +330,20 @@ pub trait BondStore: Send {
     fn upsert(&mut self, peer: BluetoothAddress, bond: ClassicBond) -> Result<(), BondStoreError>;
 }
 
+impl<T: BondStore + ?Sized> BondStore for Box<T> {
+    fn load(&self, peer: BluetoothAddress) -> Result<Option<ClassicBond>, BondStoreError> {
+        (**self).load(peer)
+    }
+
+    fn load_all(&self) -> Result<Vec<(BluetoothAddress, ClassicBond)>, BondStoreError> {
+        (**self).load_all()
+    }
+
+    fn upsert(&mut self, peer: BluetoothAddress, bond: ClassicBond) -> Result<(), BondStoreError> {
+        (**self).upsert(peer, bond)
+    }
+}
+
 /// Controller version reported during HCI initialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControllerVersion {
@@ -381,10 +383,6 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
-    #[expect(
-        dead_code,
-        reason = "T06f2 constructs capabilities from HCI initialization results"
-    )]
     pub(crate) const fn new(
         local_address: BluetoothAddress,
         controller_version: ControllerVersion,
@@ -487,10 +485,6 @@ impl Error {
         Self { kind, source: None }
     }
 
-    #[expect(
-        dead_code,
-        reason = "T06f2 preserves USB and HCI initialization failures"
-    )]
     pub(crate) fn with_source(
         kind: ErrorKind,
         source: impl StdError + Send + Sync + 'static,

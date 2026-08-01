@@ -13,6 +13,7 @@ use rusb::{
     Context, Device, DeviceHandle, Direction, Recipient, RequestType, TransferType, UsbContext,
 };
 
+use crate::ActivityNotifier;
 #[cfg(test)]
 use crate::hci::{AclPacket, CommandPacket, EventPacket};
 use crate::hci::{CodecError, Packet};
@@ -160,6 +161,28 @@ pub(crate) struct AdapterMetadata {
     bus: u8,
     address: u8,
     ports: Vec<u8>,
+}
+
+impl AdapterMetadata {
+    pub(crate) const fn vendor_id(&self) -> u16 {
+        self.vendor_id
+    }
+
+    pub(crate) const fn product_id(&self) -> u16 {
+        self.product_id
+    }
+
+    pub(crate) const fn bus(&self) -> u8 {
+        self.bus
+    }
+
+    pub(crate) const fn device_address(&self) -> u8 {
+        self.address
+    }
+
+    pub(crate) fn ports(&self) -> &[u8] {
+        &self.ports
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -358,7 +381,10 @@ pub(crate) struct PacketReader {
 }
 
 impl PacketReader {
-    fn spawn<B: UsbIo + 'static>(mut transport: UsbTransport<B>) -> Self {
+    fn spawn<B: UsbIo + 'static>(
+        mut transport: UsbTransport<B>,
+        activity: Option<ActivityNotifier>,
+    ) -> Self {
         let shutdown = transport.shutdown.clone();
         let worker_shutdown = shutdown.clone();
         let (sender, receiver) = mpsc::channel();
@@ -369,15 +395,24 @@ impl PacketReader {
                         if sender.send(ReaderEvent::Packet(packet)).is_err() {
                             break;
                         }
+                        if let Some(activity) = &activity {
+                            activity.notify();
+                        }
                     }
                     Ok(None) => {}
                     Err(error) => {
                         let _ = sender.send(ReaderEvent::Failed(error));
+                        if let Some(activity) = &activity {
+                            activity.notify();
+                        }
                         break;
                     }
                 }
             }
             let _ = sender.send(ReaderEvent::Ended);
+            if let Some(activity) = &activity {
+                activity.notify();
+            }
         });
         Self {
             receiver,
@@ -425,6 +460,13 @@ impl<B: UsbIo> PacketSink<B> {
 fn split_transport<B: UsbIo + Clone + 'static>(
     transport: UsbTransport<B>,
 ) -> (PacketReader, PacketSink<B>) {
+    split_transport_with_activity(transport, None)
+}
+
+fn split_transport_with_activity<B: UsbIo + Clone + 'static>(
+    transport: UsbTransport<B>,
+    activity: Option<ActivityNotifier>,
+) -> (PacketReader, PacketSink<B>) {
     let source = UsbTransport {
         backend: transport.backend.clone(),
         layout: transport.layout,
@@ -435,7 +477,42 @@ fn split_transport<B: UsbIo + Clone + 'static>(
         pending: VecDeque::new(),
         shutdown: transport.shutdown.clone(),
     };
-    (PacketReader::spawn(source), PacketSink { transport })
+    (
+        PacketReader::spawn(source, activity),
+        PacketSink { transport },
+    )
+}
+
+pub(crate) struct OpenedUsb {
+    reader: PacketReader,
+    sink: PacketSink<RusbIo>,
+}
+
+impl OpenedUsb {
+    pub(crate) fn send(&mut self, packet: &Packet) -> Result<(), UsbError> {
+        self.sink.send(packet)
+    }
+
+    pub(crate) fn recv_timeout(&self, timeout: Duration) -> Result<ReaderEvent, RecvTimeoutError> {
+        self.reader.recv_timeout(timeout)
+    }
+
+    pub(crate) fn metadata(&self) -> &AdapterMetadata {
+        self.sink.metadata()
+    }
+
+    pub(crate) fn close(&mut self) -> Result<(), UsbError> {
+        self.reader.close()
+    }
+}
+
+pub(crate) fn open(
+    selector: &UsbSelector,
+    activity: ActivityNotifier,
+) -> Result<OpenedUsb, UsbError> {
+    let transport = open_transport(selector)?;
+    let (reader, sink) = split_transport_with_activity(transport, Some(activity));
+    Ok(OpenedUsb { reader, sink })
 }
 
 fn frame_packets(packet_type: u8, buffered: &mut Vec<u8>) -> Result<Vec<Packet>, UsbError> {
@@ -668,6 +745,7 @@ fn interface_infos<T: UsbContext>(device: &Device<T>) -> Result<Vec<UsbInterface
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
 
     #[derive(Default)]
     struct ScriptState {
@@ -928,6 +1006,31 @@ mod tests {
             .unwrap_err(),
             UsbError::Closed
         ));
+    }
+
+    #[test]
+    fn reader_notifies_packet_and_terminal_activity() {
+        let backend = ScriptedIo::default();
+        backend
+            .state
+            .lock()
+            .unwrap()
+            .events
+            .push_back(Ok(vec![0x0E, 0x04, 0x01, 0x03, 0x0C, 0x00]));
+        let transport = UsbTransport::new(backend, layout(), metadata());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let activity = ActivityNotifier::new(move || {
+            observed.fetch_add(1, Ordering::Relaxed);
+        });
+        let (mut reader, _sink) = split_transport_with_activity(transport, Some(activity));
+
+        assert!(matches!(
+            reader.recv_timeout(Duration::from_secs(1)).unwrap(),
+            ReaderEvent::Packet(Packet::Event(_))
+        ));
+        reader.close().unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]
