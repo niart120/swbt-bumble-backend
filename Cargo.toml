@@ -6,12 +6,21 @@ rust-version = "1.87"
 license = "Apache-2.0"
 authors = ["The bumble-rs contributors", "niart120"]
 description = "Bluetooth Classic HID backend extracted for swbt-rs"
-repository = "https://github.com/niart120/bumble-rs"
+repository = "https://github.com/niart120/swbt-bumble-backend"
+documentation = "https://docs.rs/swbt-bumble-backend"
 readme = "README.md"
 keywords = ["bluetooth", "classic", "hid", "hci"]
 categories = ["hardware-support"]
 publish = true
-include = ["src/**", "tests/**", "README.md", "LICENSE", "NOTICE"]
+include = [
+    "src/**",
+    "tests/**",
+    "CHANGELOG.md",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE",
+    "NOTICE",
+]
 
 [dependencies]
 rusb = { version = "0.9.4", features = ["vendored"] }
